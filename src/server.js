@@ -29,6 +29,35 @@ app.use((req, res, next) => {
     next();
 });
 
+let isConnecting = false;
+async function connectToDatabase() {
+    if (mongoose.connection.readyState >= 1) return;
+    if (isConnecting) return;
+    if (!process.env.DATABASE_URL) {
+        console.error('FATAL: DATABASE_URL is not set. Copy .env.example to .env and add your MongoDB connection string.');
+        return;
+    }
+    try {
+        isConnecting = true;
+        console.log('Connecting to MongoDB...');
+        await mongoose.connect(process.env.DATABASE_URL, {
+            serverSelectionTimeoutMS: 10000,
+        });
+        console.log('Database connected successfully');
+    } catch (err) {
+        console.error('Database connection failed:', err.message);
+    } finally {
+        isConnecting = false;
+    }
+}
+
+app.use(async (req, res, next) => {
+    if (mongoose.connection.readyState < 1) {
+        await connectToDatabase();
+    }
+    next();
+});
+
 const router = Router();
 
 router.get('/', async (req, res) => {
@@ -58,40 +87,26 @@ app.use('/api/v1/special-alerts', specialAlertRoutes);
 
 const PORT = process.env.PORT || 3000;
 
-async function startServer() {
-    if (!process.env.DATABASE_URL) {
-        console.error('FATAL: DATABASE_URL is not set. Copy .env.example to .env and add your MongoDB connection string.');
-        process.exit(1);
-    }
+mongoose.connection.on('disconnected', () => {
+    console.warn('MongoDB disconnected');
+});
+
+if (!process.env.VERCEL) {
     if (!process.env.JWT_KEY) {
         console.error('FATAL: JWT_KEY is not set. Copy .env.example to .env and add a secret string for JWT signing.');
-        process.exit(1);
     }
-
-    try {
-        console.log('Connecting to MongoDB...');
-        await mongoose.connect(process.env.DATABASE_URL, {
-            serverSelectionTimeoutMS: 10000,
+    connectToDatabase().then(() => {
+        app.listen(PORT, '0.0.0.0', () => {
+            console.log(`Server is running on http://localhost:${PORT}`);
+            console.log(`Reachable on your LAN at http://<your-computer-ip>:${PORT}`);
+            if (isCloudinaryConfigured()) {
+                console.log(`Cloudinary: ${process.env.CLOUDINARY_CLOUD_NAME}`);
+            } else {
+                console.log('Cloudinary: not configured (optional image uploads will return 503 until configured)');
+            }
         });
-        console.log('Database connected successfully');
-    } catch (err) {
-        console.error('Database connection failed:', err.message);
-        process.exit(1);
-    }
-
-    mongoose.connection.on('disconnected', () => {
-        console.warn('MongoDB disconnected');
-    });
-
-    app.listen(PORT, '0.0.0.0', () => {
-        console.log(`Server is running on http://localhost:${PORT}`);
-        console.log(`Reachable on your LAN at http://<your-computer-ip>:${PORT}`);
-        if (isCloudinaryConfigured()) {
-            console.log(`Cloudinary: ${process.env.CLOUDINARY_CLOUD_NAME}`);
-        } else {
-            console.log('Cloudinary: not configured (optional image uploads will return 503 until configured)');
-        }
     });
 }
 
-startServer();
+export default app;
+
